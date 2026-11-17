@@ -66,9 +66,9 @@ enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 rootProject.name = "Zhihu"
 include(":app")
-include(":desktopApp")
-include(":macosApp")
-include(":macosUiDebug")
-include(":sentence_embeddings")
+// include(":desktopApp")
+// include(":macosApp")
+// include(":macosUiDebug")
+// include(":sentence_embeddings")
 include(":shared")
 include(":shared-local-db")

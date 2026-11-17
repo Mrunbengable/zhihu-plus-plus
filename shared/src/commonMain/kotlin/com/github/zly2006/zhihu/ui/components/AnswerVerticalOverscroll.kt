@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -46,7 +47,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -66,6 +70,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalDensity
@@ -83,6 +88,34 @@ import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 import kotlin.math.tanh
 
+@Stable
+class AnswerOverscrollHandle internal constructor(
+    private val getPreviousAnswer: () -> CachedAnswerContent?,
+    private val getNextAnswer: () -> CachedAnswerContent?,
+    private val getOverscrollOffset: () -> Float,
+    private val getTriggerThresholdPx: () -> Float,
+    private val onStartDrag: () -> Unit,
+    private val onDragDelta: (deltaY: Float, isTopCard: Boolean) -> Unit,
+    private val onFinishDrag: (isTopCard: Boolean) -> Unit,
+    private val onPointerOnCardChanged: (Boolean) -> Unit,
+) {
+    val previousAnswer: CachedAnswerContent?
+        get() = getPreviousAnswer()
+    val nextAnswer: CachedAnswerContent?
+        get() = getNextAnswer()
+    val overscrollOffset: Float
+        get() = getOverscrollOffset()
+    val triggerThresholdPx: Float
+        get() = getTriggerThresholdPx()
+
+    fun setPointerOnCard(down: Boolean) = onPointerOnCardChanged(down)
+    fun startCardDrag() = onStartDrag()
+    fun updateCardDrag(deltaY: Float, isTopCard: Boolean) = onDragDelta(deltaY, isTopCard)
+    fun endCardDrag(isTopCard: Boolean) = onFinishDrag(isTopCard)
+}
+
+val LocalAnswerOverscrollHandle = compositionLocalOf<AnswerOverscrollHandle?> { null }
+
 /**
  * 上下 overscroll 切换回答容器。
  * 当内容滚动到顶部/底部边界后继续滑动，显示预览卡片并提供切换。
@@ -99,6 +132,7 @@ fun AnswerVerticalOverscroll(
     scrollState: ScrollState,
     answerSwitchSensitivity: Float = DEFAULT_ANSWER_SWITCH_SENSITIVITY,
     isContentNonScrollable: Boolean = scrollState.maxValue == 0,
+    showBackgroundPreviewCards: Boolean = true,
     onOverscrollOffsetChange: (Float) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
@@ -114,6 +148,7 @@ fun AnswerVerticalOverscroll(
     val overscrollOffset = remember { Animatable(0f) }
     var hasTriggeredHaptic by remember { mutableStateOf(false) }
     var rawDragAccumulator by remember { mutableFloatStateOf(0f) }
+    var isPointerOnBoundaryCard by remember { mutableStateOf(false) }
     val currentOnOverscrollOffsetChange by rememberUpdatedState(onOverscrollOffsetChange)
 
     LaunchedEffect(overscrollOffset) {
@@ -122,11 +157,71 @@ fun AnswerVerticalOverscroll(
     }
 
     // nestedScrollConnection 没有带 key 重新 remember，因此用 rememberUpdatedState 保证它总能读到最新值。
+    val currentPreviousAnswer by rememberUpdatedState(previousAnswer)
+    val currentNextAnswer by rememberUpdatedState(nextAnswer)
     val currentCanGoPrevious by rememberUpdatedState(previousAnswer != null)
     val currentCanGoNext by rememberUpdatedState(nextAnswer != null)
     val currentOnNavigatePrevious by rememberUpdatedState(onNavigatePrevious)
     val currentOnNavigateNext by rememberUpdatedState(onNavigateNext)
     val currentTriggerThresholdPx by rememberUpdatedState(triggerThresholdPx)
+    val currentMaxOverscrollPx by rememberUpdatedState(maxOverscrollPx)
+
+    val overscrollHandle = remember {
+        AnswerOverscrollHandle(
+            getPreviousAnswer = { currentPreviousAnswer },
+            getNextAnswer = { currentNextAnswer },
+            getOverscrollOffset = { overscrollOffset.value },
+            getTriggerThresholdPx = { currentTriggerThresholdPx },
+            onStartDrag = {
+                rawDragAccumulator = 0f
+                hasTriggeredHaptic = false
+            },
+            onDragDelta = { deltaY, isTopCard ->
+                rawDragAccumulator = if (isTopCard) {
+                    (rawDragAccumulator + deltaY).coerceAtLeast(0f)
+                } else {
+                    (rawDragAccumulator + deltaY).coerceAtMost(0f)
+                }
+                val newOffset = dampedOverscrollOffset(
+                    rawDelta = rawDragAccumulator,
+                    maxOverscrollPx = currentMaxOverscrollPx,
+                    dampingFactor = DAMPING_FACTOR,
+                )
+                coroutineScope.launch { overscrollOffset.snapTo(newOffset) }
+                if (!hasTriggeredHaptic && abs(newOffset) >= currentTriggerThresholdPx) {
+                    hasTriggeredHaptic = true
+                    hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                } else if (hasTriggeredHaptic && abs(newOffset) < currentTriggerThresholdPx) {
+                    hasTriggeredHaptic = false
+                }
+            },
+            onFinishDrag = { isTopCard ->
+                val currentOffset = overscrollOffset.value
+                var didNavigate = false
+                if (isTopCard && currentOffset >= currentTriggerThresholdPx && currentCanGoPrevious) {
+                    currentOnNavigatePrevious()
+                    didNavigate = true
+                } else if (!isTopCard && currentOffset <= -currentTriggerThresholdPx && currentCanGoNext) {
+                    currentOnNavigateNext()
+                    didNavigate = true
+                }
+                rawDragAccumulator = 0f
+                hasTriggeredHaptic = false
+                if (!didNavigate) {
+                    coroutineScope.launch {
+                        overscrollOffset.animateTo(
+                            0f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                stiffness = Spring.StiffnessMedium,
+                            ),
+                        )
+                    }
+                }
+            },
+            onPointerOnCardChanged = { isPointerOnBoundaryCard = it },
+        )
+    }
 
     val nestedScrollConnection = remember {
         object : NestedScrollConnection {
@@ -239,8 +334,13 @@ fun AnswerVerticalOverscroll(
                                 rawDragAccumulator = 0f
                                 hasTriggeredHaptic = false
                                 var dragStarted = false
+                                var yieldedToBoundaryCard = false
                                 while (true) {
                                     val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    if (isPointerOnBoundaryCard) {
+                                        yieldedToBoundaryCard = true
+                                        break
+                                    }
                                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                     if (!change.pressed) break
 
@@ -287,6 +387,8 @@ fun AnswerVerticalOverscroll(
                                     }
                                 }
 
+                                if (yieldedToBoundaryCard) continue
+
                                 val currentOffset = overscrollOffset.value
                                 var didNavigate = false
                                 if (abs(currentOffset) >= currentTriggerThresholdPx) {
@@ -319,10 +421,10 @@ fun AnswerVerticalOverscroll(
                 },
             ),
     ) {
-        // 预览卡片在底层，被主内容覆盖，主内容滑动时露出
+        // 预览卡片在底层，被主内容覆盖，主内容滑动时露出（当页面内已内联止点预览卡片时关闭底层重复卡片）
 
         // 上方预览卡片（上一个回答）—— 固定在顶部
-        if (overscrollOffset.value > 0 && previousAnswer != null) {
+        if (showBackgroundPreviewCards && overscrollOffset.value > 0 && previousAnswer != null) {
             val progress = (overscrollOffset.value / triggerThresholdPx).coerceIn(0f, 1.5f)
             AnswerPreviewCard(
                 authorName = previousAnswer.authorName,
@@ -340,7 +442,7 @@ fun AnswerVerticalOverscroll(
         }
 
         // 下方预览卡片（下一个回答）—— 固定在底部，内容顺序反转
-        if (overscrollOffset.value < 0 && nextAnswer != null) {
+        if (showBackgroundPreviewCards && overscrollOffset.value < 0 && nextAnswer != null) {
             val progress = (abs(overscrollOffset.value) / triggerThresholdPx).coerceIn(0f, 1.5f)
             AnswerPreviewCard(
                 authorName = nextAnswer.authorName,
@@ -358,14 +460,121 @@ fun AnswerVerticalOverscroll(
             )
         }
 
-        // 主内容在最上层，跟随 overscroll 偏移，滑动露出预览卡片
+        // 主内容在最上层，跟随 overscroll 偏移
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .offset { IntOffset(0, overscrollOffset.value.roundToInt()) },
         ) {
-            content()
+            CompositionLocalProvider(LocalAnswerOverscrollHandle provides overscrollHandle) {
+                content()
+            }
         }
+    }
+}
+
+/**
+ * 位于回答滚动流上/下止点、不可框选文字的内联预览卡片。
+ * 滚轮滚到止点自然露出后，鼠标左键（或手指）按住沿边界方向拖拽即可驱动阻尼并切换回答，反向滚动则透传给正文滚动容器。
+ */
+@Composable
+fun AnswerBoundaryPreviewCard(
+    isTopCard: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val handle = LocalAnswerOverscrollHandle.current ?: return
+    val cached = if (isTopCard) handle.previousAnswer else handle.nextAnswer
+    if (cached == null) return
+
+    val density = LocalDensity.current
+    val mouseSlopPx = with(density) { 3.dp.toPx() }
+    val currentHandle by rememberUpdatedState(handle)
+
+    val activeOffset = if (isTopCard) {
+        handle.overscrollOffset.coerceAtLeast(0f)
+    } else {
+        (-handle.overscrollOffset).coerceAtLeast(0f)
+    }
+    val threshold = handle.triggerThresholdPx.coerceAtLeast(1f)
+    val isTriggered = activeOffset >= threshold
+    val label = if (isTopCard) {
+        "向下拖拽卡片 · 回看${cached.sourceLabel}的上一个回答"
+    } else {
+        "向上拖拽卡片 · 切换${cached.sourceLabel}的下一个回答"
+    }
+
+    DisableSelection {
+        AnswerPreviewCard(
+            authorName = cached.authorName,
+            excerpt = cached.title,
+            avatarUrl = cached.authorAvatarUrl,
+            label = label,
+            icon = if (isTopCard) Icons.Filled.ArrowDownward else Icons.Filled.ArrowUpward,
+            isTriggered = isTriggered,
+            progress = 1f,
+            reverseLayout = !isTopCard,
+            horizontalPadding = 0.dp,
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp)
+                .pointerInput(isTopCard) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            var draggingCard = false
+                            var rejectedDirection = false
+                            currentHandle.setPointerOnCard(true)
+                            try {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Main)
+                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!change.pressed) break
+                                    if (rejectedDirection) continue
+
+                                    val deltaY = change.positionChange().y
+                                    if (!draggingCard) {
+                                        val totalDx = change.position.x - down.position.x
+                                        val totalDy = change.position.y - down.position.y
+                                        val slop = if (change.type == PointerType.Mouse) {
+                                            mouseSlopPx
+                                        } else {
+                                            viewConfiguration.touchSlop
+                                        }
+                                        if (totalDy.absoluteValue <= slop && totalDx.absoluteValue <= slop) {
+                                            continue
+                                        }
+                                        if (totalDx.absoluteValue > totalDy.absoluteValue) {
+                                            rejectedDirection = true
+                                            continue
+                                        }
+                                        val inTriggerDirection = if (isTopCard) totalDy > 0f else totalDy < 0f
+                                        if (!inTriggerDirection) {
+                                            // 反向拖拽（如从底卡向下划回正文、从顶卡向上划入正文）不拦截，直接交给外层滚动容器。
+                                            rejectedDirection = true
+                                            continue
+                                        }
+                                        draggingCard = true
+                                        currentHandle.startCardDrag()
+                                        change.consume()
+                                        currentHandle.updateCardDrag(totalDy, isTopCard)
+                                        continue
+                                    }
+
+                                    change.consume()
+                                    if (deltaY != 0f) {
+                                        currentHandle.updateCardDrag(deltaY, isTopCard)
+                                    }
+                                }
+                            } finally {
+                                currentHandle.setPointerOnCard(false)
+                                if (draggingCard) {
+                                    currentHandle.endCardDrag(isTopCard)
+                                }
+                            }
+                        }
+                    }
+                },
+        )
     }
 }
 
@@ -379,12 +588,13 @@ private fun AnswerPreviewCard(
     isTriggered: Boolean,
     progress: Float,
     reverseLayout: Boolean = false,
+    horizontalPadding: androidx.compose.ui.unit.Dp = 16.dp,
     modifier: Modifier = Modifier,
 ) {
     val bgColor = if (isTriggered) {
         MaterialTheme.colorScheme.primaryContainer
     } else {
-        MaterialTheme.colorScheme.surfaceVariant
+        MaterialTheme.colorScheme.surfaceContainerHigh
     }
     val contentColor = if (isTriggered) {
         MaterialTheme.colorScheme.onPrimaryContainer
@@ -394,7 +604,7 @@ private fun AnswerPreviewCard(
 
     Box(
         modifier = modifier
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = horizontalPadding)
             .clip(RoundedCornerShape(16.dp))
             .background(bgColor)
             .alpha((progress).coerceIn(0f, 1f))

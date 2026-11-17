@@ -139,6 +139,7 @@ import com.github.zly2006.zhihu.ui.article.voteUpNeutralButtonColors
 import com.github.zly2006.zhihu.ui.article.voteUpNeutralContent
 import com.github.zly2006.zhihu.ui.article.voteUpNeutralContentDuo3
 import com.github.zly2006.zhihu.ui.components.ANSWER_SWITCH_SENSITIVITY_PREFERENCE_KEY
+import com.github.zly2006.zhihu.ui.components.AnswerBoundaryPreviewCard
 import com.github.zly2006.zhihu.ui.components.AnswerHorizontalOverscroll
 import com.github.zly2006.zhihu.ui.components.AnswerVerticalOverscroll
 import com.github.zly2006.zhihu.ui.components.AuthorBadge
@@ -149,6 +150,7 @@ import com.github.zly2006.zhihu.ui.components.DEFAULT_ANSWER_SWITCH_SENSITIVITY
 import com.github.zly2006.zhihu.ui.components.DraggableRefreshButton
 import com.github.zly2006.zhihu.ui.components.ExportDialogComponent
 import com.github.zly2006.zhihu.ui.components.MyModalBottomSheet
+import com.github.zly2006.zhihu.ui.components.RegisterAnswerSwitchTargetEffect
 import com.github.zly2006.zhihu.ui.components.VerticalReadingProgressBar
 import com.github.zly2006.zhihu.ui.components.VotersSheet
 import com.github.zly2006.zhihu.ui.components.ZhihuTwoRowsTopAppBar
@@ -316,6 +318,25 @@ fun ArticleScreen(
             .takeIf { article.type == ArticleType.Answer && pageTurnSwitchAnswer },
         onPageDownAtEnd = (answerNavigationState::navigateToNext)
             .takeIf { article.type == ArticleType.Answer && pageTurnSwitchAnswer },
+    )
+    RegisterAnswerSwitchTargetEffect(
+        active = article.type == ArticleType.Answer && pageTurnActive,
+        onPrevious = {
+            if (answerNavigationState.answerNavigator?.previousAnswer != null) {
+                answerNavigationState.navigateToPrevious()
+                true
+            } else {
+                false
+            }
+        },
+        onNext = {
+            if (answerNavigationState.answerNavigator?.nextAnswer != null) {
+                answerNavigationState.navigateToNext()
+                true
+            } else {
+                false
+            }
+        },
     )
     val hapticFeedback = LocalHapticFeedback.current
     val readingPlayerOverlayRouteId = articleNavController?.currentBackStackEntry?.id
@@ -949,6 +970,12 @@ fun ArticleScreen(
                             .padding(innerPadding)
                             .padding(top = 8.dp),
                     ) {
+                        if (usesVerticalAnswerSwitch && !(useWebView && isLegacyWebViewSupported)) {
+                            AnswerBoundaryPreviewCard(
+                                isTopCard = true,
+                                modifier = Modifier.testTag("answer_previous_preview_card"),
+                            )
+                        }
                         if (isImmersiveMode && viewModel.authorName.isNotBlank()) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1195,9 +1222,20 @@ fun ArticleScreen(
                                             }
                                         }
                                         ContentEndMarker()
-                                        Spacer(modifier = Modifier.height((16 + 36).dp))
+                                        val hasBottomPreviewCard =
+                                            usesVerticalAnswerSwitch && answerNavigationState.answerNavigator?.nextAnswer != null
+                                        Spacer(modifier = Modifier.height(if (hasBottomPreviewCard) 8.dp else (16 + 36).dp))
                                     },
                                 )
+                            }
+                        }
+                        if (usesVerticalAnswerSwitch && !(useWebView && isLegacyWebViewSupported)) {
+                            AnswerBoundaryPreviewCard(
+                                isTopCard = false,
+                                modifier = Modifier.testTag("answer_next_preview_card"),
+                            )
+                            if (answerNavigationState.answerNavigator?.nextAnswer != null) {
+                                Spacer(modifier = Modifier.height((16 + 36).dp))
                             }
                         }
                     }
@@ -1244,6 +1282,7 @@ fun ArticleScreen(
                 isAtBottom = { scrollState.value >= effectiveScrollMaxValue },
                 scrollState = scrollState,
                 answerSwitchSensitivity = answerSwitchSensitivity,
+                showBackgroundPreviewCards = false,
                 onOverscrollOffsetChange = updateReadingPlayerOverlayOffset,
             ) {
                 MainContent()

@@ -1,8 +1,8 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 plugins {
-    id("com.android.application") version "9.5.1" apply false
-    id("com.android.library") version "9.5.1" apply false
-    id("com.android.kotlin.multiplatform.library") version "9.5.1" apply false
+    id("com.android.application") version "9.1.1" apply false
+    id("com.android.library") version "9.1.1" apply false
+    id("com.android.kotlin.multiplatform.library") version "9.1.1" apply false
     id("org.jetbrains.compose") version "1.12.2" apply false
     id("com.mikepenz.aboutlibraries.plugin.android") version "15.3.0" apply false
     kotlin("jvm") version "2.4.0" apply false

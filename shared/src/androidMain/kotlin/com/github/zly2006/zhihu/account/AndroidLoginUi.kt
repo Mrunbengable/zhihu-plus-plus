@@ -151,7 +151,16 @@ private fun configureWebLogin(
     onCookiesReady: (Map<String, String>) -> Unit,
 ) {
     webView.setupUpWebviewClient()
-    webView.settings.javaScriptEnabled = true
+    webView.settings.apply {
+        javaScriptEnabled = true
+        domStorageEnabled = true
+        userAgentString = ZHIHU_DESKTOP_USER_AGENT
+        useWideViewPort = true
+        loadWithOverviewMode = true
+        setSupportZoom(true)
+        builtInZoomControls = true
+        displayZoomControls = false
+    }
     webView.webViewClient = object : WebViewClient() {
         override fun shouldOverrideUrlLoading(
             view: WebView?,
@@ -185,6 +194,7 @@ private fun configureRiskControlWebView(
 ) {
     webView.setupUpWebviewClient()
     webView.settings.javaScriptEnabled = true
+    webView.settings.domStorageEnabled = true
     webView.settings.userAgentString = ZHIHU_DESKTOP_USER_AGENT
     val cookieManager = CookieManager.getInstance()
     cookieManager.setAcceptThirdPartyCookies(webView, true)

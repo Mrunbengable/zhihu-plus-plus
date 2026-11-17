@@ -48,6 +48,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -70,11 +71,13 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollDispatcher
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -101,36 +104,86 @@ enum class PageTurnCommand {
     JumpToBottom,
 }
 
-/** Routes each command to the most recently registered eligible scroll surface. */
+/**
+ * Routes each command to the highest-priority most recently registered eligible scroll surface,
+ * and routes keyboard/mouse answer-switch and feed-refresh shortcuts to active surfaces.
+ */
 class PageTurnDispatcher {
     private val targets = mutableListOf<PageTurnTargetRegistration>()
+    private val answerSwitchTargets = mutableListOf<AnswerSwitchTargetRegistration>()
+    private val refreshTargets = mutableListOf<FeedRefreshTargetRegistration>()
 
     var hasActiveTarget by mutableStateOf(false)
         private set
 
-    internal fun registerTarget(): PageTurnTargetRegistration {
-        val registration = PageTurnTargetRegistration(this)
+    val hasAnswerSwitchTarget: Boolean
+        get() = answerSwitchTargets.isNotEmpty()
+
+    val hasRefreshTarget: Boolean
+        get() = refreshTargets.isNotEmpty()
+
+    internal fun registerTarget(priority: Int = 0): PageTurnTargetRegistration {
+        val registration = PageTurnTargetRegistration(this, priority)
         targets += registration
         hasActiveTarget = true
         return registration
     }
 
-    fun dispatch(command: PageTurnCommand): Boolean =
-        targets
-            .lastOrNull()
+    fun dispatch(command: PageTurnCommand): Boolean {
+        val maxPriority = targets.maxOfOrNull { it.priority } ?: return false
+        return targets
+            .lastOrNull { it.priority == maxPriority }
             ?.commands
             ?.trySend(command)
             ?.isSuccess == true
+    }
 
     internal fun unregisterTarget(registration: PageTurnTargetRegistration) {
         targets.remove(registration)
         registration.commands.close()
         hasActiveTarget = targets.isNotEmpty()
     }
+
+    internal fun registerAnswerSwitchTarget(
+        priority: Int = 0,
+        onPrevious: () -> Boolean,
+        onNext: () -> Boolean,
+    ): AnswerSwitchTargetRegistration {
+        val registration = AnswerSwitchTargetRegistration(this, priority, onPrevious, onNext)
+        answerSwitchTargets += registration
+        return registration
+    }
+
+    internal fun unregisterAnswerSwitchTarget(registration: AnswerSwitchTargetRegistration) {
+        answerSwitchTargets.remove(registration)
+    }
+
+    fun dispatchAnswerSwitch(next: Boolean): Boolean {
+        val maxPriority = answerSwitchTargets.maxOfOrNull { it.priority } ?: return false
+        val target = answerSwitchTargets.lastOrNull { it.priority == maxPriority } ?: return false
+        return if (next) target.onNext() else target.onPrevious()
+    }
+
+    internal fun registerRefreshTarget(onRefresh: () -> Unit): FeedRefreshTargetRegistration {
+        val registration = FeedRefreshTargetRegistration(this, onRefresh)
+        refreshTargets += registration
+        return registration
+    }
+
+    internal fun unregisterRefreshTarget(registration: FeedRefreshTargetRegistration) {
+        refreshTargets.remove(registration)
+    }
+
+    fun dispatchRefresh(): Boolean {
+        val target = refreshTargets.lastOrNull() ?: return false
+        target.onRefresh()
+        return true
+    }
 }
 
 internal class PageTurnTargetRegistration(
     private val dispatcher: PageTurnDispatcher,
+    val priority: Int = 0,
 ) {
     val commands = Channel<PageTurnCommand>(Channel.BUFFERED)
     private var closed = false
@@ -142,7 +195,36 @@ internal class PageTurnTargetRegistration(
     }
 }
 
+internal class AnswerSwitchTargetRegistration(
+    private val dispatcher: PageTurnDispatcher,
+    val priority: Int,
+    val onPrevious: () -> Boolean,
+    val onNext: () -> Boolean,
+) {
+    private var closed = false
+
+    fun close() {
+        if (closed) return
+        closed = true
+        dispatcher.unregisterAnswerSwitchTarget(this)
+    }
+}
+
+internal class FeedRefreshTargetRegistration(
+    private val dispatcher: PageTurnDispatcher,
+    val onRefresh: () -> Unit,
+) {
+    private var closed = false
+
+    fun close() {
+        if (closed) return
+        closed = true
+        dispatcher.unregisterRefreshTarget(this)
+    }
+}
+
 val LocalPageTurnDispatcher = staticCompositionLocalOf(::PageTurnDispatcher)
+val LocalPageTurnPriority = compositionLocalOf { 0 }
 
 /** Shared runtime configuration and optional guide state for targets under one dispatcher. */
 internal class PageTurnRuntimeState(
@@ -196,13 +278,14 @@ internal fun rememberPageTurnRuntimeState(): PageTurnRuntimeState {
 private fun PageTurnTargetRegistrationEffect(
     dispatcher: PageTurnDispatcher,
     active: Boolean,
+    priority: Int = LocalPageTurnPriority.current,
     onCommand: suspend (PageTurnCommand) -> Unit,
 ) {
     val currentHandler by rememberUpdatedState(onCommand)
     var registration by remember(dispatcher) { mutableStateOf<PageTurnTargetRegistration?>(null) }
 
-    DisposableEffect(dispatcher, active) {
-        if (active) registration = dispatcher.registerTarget()
+    DisposableEffect(dispatcher, active, priority) {
+        if (active) registration = dispatcher.registerTarget(priority)
         onDispose {
             registration?.close()
             registration = null
@@ -211,6 +294,51 @@ private fun PageTurnTargetRegistrationEffect(
     registration?.let { target ->
         LaunchedEffect(target) {
             for (command in target.commands) currentHandler(command)
+        }
+    }
+}
+
+@Composable
+fun RegisterAnswerSwitchTargetEffect(
+    active: Boolean,
+    onPrevious: () -> Boolean,
+    onNext: () -> Boolean,
+) {
+    val dispatcher = LocalPageTurnDispatcher.current
+    val priority = LocalPageTurnPriority.current
+    val currentPrevious by rememberUpdatedState(onPrevious)
+    val currentNext by rememberUpdatedState(onNext)
+    DisposableEffect(dispatcher, active, priority) {
+        val registration = if (active && isPageTurnSupported) {
+            dispatcher.registerAnswerSwitchTarget(
+                priority = priority,
+                onPrevious = { currentPrevious() },
+                onNext = { currentNext() },
+            )
+        } else {
+            null
+        }
+        onDispose {
+            registration?.close()
+        }
+    }
+}
+
+@Composable
+fun RegisterFeedRefreshTargetEffect(
+    active: Boolean,
+    onRefresh: () -> Unit,
+) {
+    val dispatcher = LocalPageTurnDispatcher.current
+    val currentRefresh by rememberUpdatedState(onRefresh)
+    DisposableEffect(dispatcher, active) {
+        val registration = if (active && isPageTurnSupported) {
+            dispatcher.registerRefreshTarget { currentRefresh() }
+        } else {
+            null
+        }
+        onDispose {
+            registration?.close()
         }
     }
 }
@@ -226,20 +354,33 @@ fun DraggablePageTurnButtons(
     preferenceName: String = "fabPageTurn",
 ) {
     val density = LocalDensity.current
-    val screenSize = LocalWindowInfo.current.containerSize
+    val windowSize = LocalWindowInfo.current.containerSize
+    var measuredSize by remember { mutableStateOf(IntSize.Zero) }
+    val screenSize = if (measuredSize.width > 0 && measuredSize.height > 0) {
+        measuredSize
+    } else {
+        windowSize
+    }
     val settings = rememberSettingsStore()
     val buttonSize = 56.dp
     val gap = 4.dp
     val columnHeight = buttonSize * 2 + gap
     val defaultY = with(density) { screenSize.height - columnHeight.toPx() - 80.dp.toPx() }
-    var offsetX by remember(preferenceName) { mutableFloatStateOf(settings.getFloat("$preferenceName-x", 0f)) }
+    val initialSavedX = remember(preferenceName) { settings.getFloat("$preferenceName-x", 0f) }
+    var dockedOnLeft by remember(preferenceName) { mutableStateOf(initialSavedX <= 0.5f) }
+    var offsetX by remember(preferenceName) { mutableFloatStateOf(initialSavedX) }
     var offsetY by remember(preferenceName) { mutableFloatStateOf(settings.getFloat("$preferenceName-y", defaultY)) }
+    var dragging by remember { mutableStateOf(false) }
 
     fun clampPositionToViewport() {
         with(density) {
             val maxX = (screenSize.width - buttonSize.toPx()).coerceAtLeast(0f)
             val maxY = (screenSize.height - columnHeight.toPx()).coerceAtLeast(0f)
-            offsetX = offsetX.coerceIn(0f, maxX)
+            offsetX = if (!dragging) {
+                if (dockedOnLeft) 0f else maxX
+            } else {
+                offsetX.coerceIn(0f, maxX)
+            }
             offsetY = offsetY.coerceIn(0f, maxY)
         }
     }
@@ -254,50 +395,51 @@ fun DraggablePageTurnButtons(
     val opacityFraction = fabOpacityValue.coerceIn(10, 100) / 100f
     val fabColor = FloatingActionButtonDefaults.containerColor.copy(alpha = opacityFraction)
     val iconTint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = opacityFraction)
-    var dragging by remember { mutableStateOf(false) }
 
-    Column(
-        modifier = modifier
-            .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
-            .pointerInput(screenSize, density, preferenceName) {
-                detectDragGestures(
-                    onDragStart = {
-                        dragging = true
-                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                    },
-                    onDragEnd = {
-                        dragging = false
-                        clampPositionToViewport()
-                        offsetX = if (offsetX < screenSize.width / 2f) {
-                            0f
-                        } else {
-                            with(density) { (screenSize.width - buttonSize.toPx()).coerceAtLeast(0f) }
-                        }
-                        settings.putFloat("$preferenceName-x", offsetX)
-                        settings.putFloat("$preferenceName-y", offsetY)
-                    },
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        if (dragging) {
-                            offsetX += dragAmount.x
-                            offsetY += dragAmount.y
-                            clampPositionToViewport()
-                        }
-                    },
-                )
-            },
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onSizeChanged { measuredSize = it },
     ) {
-        PageTurnButton(Icons.Default.KeyboardArrowUp, "上翻页", onPageUp, onLongPressUp, buttonSize, fabColor, iconTint)
-        Spacer(modifier = Modifier.height(gap))
-        PageTurnButton(
-            Icons.Default.KeyboardArrowDown,
-            "下翻页",
-            onPageDown,
-            onLongPressDown,
-            buttonSize,
-            fabColor,
-            iconTint,
-        )
+        Column(
+            modifier = modifier
+                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                .pointerInput(screenSize, density, preferenceName) {
+                    detectDragGestures(
+                        onDragStart = {
+                            dragging = true
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                        },
+                        onDragEnd = {
+                            dragging = false
+                            dockedOnLeft = offsetX < screenSize.width / 2f
+                            clampPositionToViewport()
+                            settings.putFloat("$preferenceName-x", offsetX)
+                            settings.putFloat("$preferenceName-y", offsetY)
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            if (dragging) {
+                                offsetX += dragAmount.x
+                                offsetY += dragAmount.y
+                                clampPositionToViewport()
+                            }
+                        },
+                    )
+                },
+        ) {
+            PageTurnButton(Icons.Default.KeyboardArrowUp, "上翻页", onPageUp, onLongPressUp, buttonSize, fabColor, iconTint)
+            Spacer(modifier = Modifier.height(gap))
+            PageTurnButton(
+                Icons.Default.KeyboardArrowDown,
+                "下翻页",
+                onPageDown,
+                onLongPressDown,
+                buttonSize,
+                fabColor,
+                iconTint,
+            )
+        }
     }
 }
 

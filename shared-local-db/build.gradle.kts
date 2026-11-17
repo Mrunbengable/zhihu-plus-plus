@@ -51,7 +51,7 @@ kotlin {
 
     androidLibrary {
         namespace = "com.github.zly2006.zhihu.shared.localdb"
-        compileSdk = 37
+        compileSdk = 36
         minSdk = 27
 
         compilerOptions {

@@ -98,7 +98,7 @@ kotlin {
 
     androidLibrary {
         namespace = "com.github.zly2006.zhihu.shared"
-        compileSdk = 37
+        compileSdk = 36
         minSdk = 27
 
         compilerOptions {
@@ -156,10 +156,9 @@ kotlin {
         require(selectedAndroidVariants.size <= 1) {
             "Full and Lite Android tasks require separate Gradle invocations"
         }
-        when (selectedAndroidVariants.singleOrNull()) {
+        when (selectedAndroidVariants.singleOrNull() ?: "lite") {
             "full" -> androidMain.get().dependsOn(androidFull)
             "lite" -> androidMain.get().dependsOn(androidLite)
-            null -> Unit
         }
 
         commonMain.dependencies {

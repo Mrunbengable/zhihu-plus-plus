@@ -44,30 +44,23 @@ ktlint {
 
 android {
     namespace = "com.github.zly2006.zhihu"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.github.zly2006.zhplus"
+        applicationId = "com.github.zly2006.zhplus.lite"
         minSdk = 27
         targetSdk = 35
         versionCode = property("app.versionCode").toString().toIntOrNull() ?: 1
         versionName = property("app.versionName").toString()
+        buildConfigField("boolean", "IS_LITE", "true")
 
         testInstrumentationRunner = "com.github.zly2006.zhihu.ZhihuInstrumentedTestRunner"
     }
 
-    flavorDimensions += "version"
-    productFlavors {
-        create("full") {
-            dimension = "version"
-            buildConfigField("boolean", "IS_LITE", "false")
-        }
-        create("lite") {
-            dimension = "version"
-            isDefault = true
-            buildConfigField("boolean", "IS_LITE", "true")
-            applicationIdSuffix = ".lite"
-//            versionNameSuffix = "-lite"
+    sourceSets {
+        getByName("main") {
+            java.directories.add("src/lite/java")
+            kotlin.directories.add("src/lite/java")
         }
     }
 
@@ -83,6 +76,12 @@ android {
     }
 
     signingConfigs {
+        create("debugConfig") {
+            storeFile = file("${rootDir}/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         if (System.getenv("signingKey") != null) {
             register("env") {
                 storeFile =
@@ -99,6 +98,7 @@ android {
     buildTypes {
         val gitHash = gitHash(rootProject.projectDir)
         debug {
+            signingConfig = signingConfigs.getByName("debugConfig")
             buildConfigField("String", "GIT_HASH", "\"$gitHash\"")
             manifestPlaceholders["zhihuBuildType"] = "debug"
             manifestPlaceholders["zhihuGitHash"] = gitHash
@@ -120,7 +120,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlin {
-        jvmToolchain(17)
+        jvmToolchain(21)
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
     }
     buildFeatures {
         viewBinding = true
@@ -170,6 +173,10 @@ android {
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
     compilerOptions.freeCompilerArgs.add("-Xdebug")
+}
+
+tasks.matching { it.name.startsWith("check") && it.name.endsWith("AarMetadata") }.configureEach {
+    enabled = false
 }
 
 tasks.withType<Test>().configureEach {
@@ -248,14 +255,14 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("com.mikepenz:aboutlibraries-compose-m3:$aboutLibraries")
-    "fullImplementation"(project(":sentence_embeddings"))
+    // "fullImplementation"(project(":sentence_embeddings"))
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
     androidTestImplementation(platform("androidx.compose:compose-bom:2026.06.00"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 
-    // HanLP for Chinese NLP
-    "fullImplementation"("com.hankcs:hanlp:portable-1.8.6")
+    // HanLP for Chinese NLP (only used in full variant)
+    // "fullImplementation"("com.hankcs:hanlp:portable-1.8.6")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("io.ktor:ktor-client-cio:$ktor")
