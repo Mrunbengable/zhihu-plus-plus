@@ -107,7 +107,6 @@ import com.github.zly2006.zhihu.navigation.LocalNavigator
 import com.github.zly2006.zhihu.navigation.Question
 import com.github.zly2006.zhihu.navigation.Topic
 import com.github.zly2006.zhihu.navigation.WriteAnswer
-import com.github.zly2006.zhihu.platform.isAnswerSwipeSupported
 import com.github.zly2006.zhihu.platform.rememberSettingsStore
 import com.github.zly2006.zhihu.platform.rememberUserMessageSink
 import com.github.zly2006.zhihu.platform.rememberZhihuWebUrlOpener
@@ -208,9 +207,7 @@ fun QuestionScreen(
     val topBarTitleThresholdPx = with(LocalDensity.current) { 160.dp.roundToPx() }
     val showTopBarTitle by remember {
         derivedStateOf {
-            val headerIndex = if (isAnswerSwipeSupported && viewModel.displayItems.isNotEmpty()) 1 else 0
-            listState.firstVisibleItemIndex > headerIndex ||
-                (listState.firstVisibleItemIndex == headerIndex && listState.firstVisibleItemScrollOffset >= topBarTitleThresholdPx)
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset >= topBarTitleThresholdPx
         }
     }
     val pageTurnTarget = rememberPageTurnTarget(

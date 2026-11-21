@@ -17,6 +17,8 @@
 
 package com.github.zly2006.zhihu.ui.components
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.combinedClickable
@@ -25,6 +27,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -71,13 +74,10 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollDispatcher
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -354,40 +354,16 @@ fun DraggablePageTurnButtons(
     preferenceName: String = "fabPageTurn",
 ) {
     val density = LocalDensity.current
-    val windowSize = LocalWindowInfo.current.containerSize
-    var measuredSize by remember { mutableStateOf(IntSize.Zero) }
-    val screenSize = if (measuredSize.width > 0 && measuredSize.height > 0) {
-        measuredSize
-    } else {
-        windowSize
-    }
     val settings = rememberSettingsStore()
     val buttonSize = 56.dp
     val gap = 4.dp
     val columnHeight = buttonSize * 2 + gap
-    val defaultY = with(density) { screenSize.height - columnHeight.toPx() - 80.dp.toPx() }
     val initialSavedX = remember(preferenceName) { settings.getFloat("$preferenceName-x", 0f) }
     var dockedOnLeft by remember(preferenceName) { mutableStateOf(initialSavedX <= 0.5f) }
     var offsetX by remember(preferenceName) { mutableFloatStateOf(initialSavedX) }
-    var offsetY by remember(preferenceName) { mutableFloatStateOf(settings.getFloat("$preferenceName-y", defaultY)) }
+    var offsetY by remember(preferenceName) { mutableFloatStateOf(settings.getFloat("$preferenceName-y", Float.MAX_VALUE)) }
     var dragging by remember { mutableStateOf(false) }
 
-    fun clampPositionToViewport() {
-        with(density) {
-            val maxX = (screenSize.width - buttonSize.toPx()).coerceAtLeast(0f)
-            val maxY = (screenSize.height - columnHeight.toPx()).coerceAtLeast(0f)
-            offsetX = if (!dragging) {
-                if (dockedOnLeft) 0f else maxX
-            } else {
-                offsetX.coerceIn(0f, maxX)
-            }
-            offsetY = offsetY.coerceIn(0f, maxY)
-        }
-    }
-
-    LaunchedEffect(screenSize, density, preferenceName) {
-        clampPositionToViewport()
-    }
     val hapticFeedback = LocalHapticFeedback.current
     val fabOpacityValue by rememberObservedSetting(settings, PREF_FAB_OPACITY) {
         getInt(PREF_FAB_OPACITY, DEFAULT_FAB_OPACITY)
@@ -396,33 +372,66 @@ fun DraggablePageTurnButtons(
     val fabColor = FloatingActionButtonDefaults.containerColor.copy(alpha = opacityFraction)
     val iconTint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = opacityFraction)
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .onSizeChanged { measuredSize = it },
-    ) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val containerWidthPx = constraints.maxWidth.toFloat()
+        val containerHeightPx = constraints.maxHeight.toFloat()
+        val maxX = with(density) { (containerWidthPx - buttonSize.toPx()).coerceAtLeast(0f) }
+        val maxY = with(density) { (containerHeightPx - columnHeight.toPx()).coerceAtLeast(0f) }
+        val defaultY = with(density) { (containerHeightPx - columnHeight.toPx() - 80.dp.toPx()).coerceAtLeast(0f) }
+
+        val targetOffsetX = if (dragging) {
+            offsetX.coerceIn(0f, maxX)
+        } else {
+            if (dockedOnLeft) 0f else maxX
+        }
+        val targetOffsetY = (if (offsetY == Float.MAX_VALUE) defaultY else offsetY).coerceIn(0f, maxY)
+
+        val currentContainerWidth by rememberUpdatedState(containerWidthPx)
+        val currentMaxX by rememberUpdatedState(maxX)
+        val currentMaxY by rememberUpdatedState(maxY)
+
+        val animatedOffsetX by animateFloatAsState(
+            targetValue = targetOffsetX,
+            animationSpec = tween(if (dragging) 1 else 250),
+            label = "pageTurnOffsetX",
+        )
+        val animatedOffsetY by animateFloatAsState(
+            targetValue = targetOffsetY,
+            animationSpec = tween(if (dragging) 1 else 250),
+            label = "pageTurnOffsetY",
+        )
+        val displayedOffsetX = if (dragging) targetOffsetX else animatedOffsetX
+        val displayedOffsetY = if (dragging) targetOffsetY else animatedOffsetY
+
+        fun finishDrag() {
+            dragging = false
+            val clampedX = offsetX.coerceIn(0f, currentMaxX)
+            val clampedY = offsetY.coerceIn(0f, currentMaxY)
+            dockedOnLeft = clampedX < currentContainerWidth / 2f
+            offsetX = if (dockedOnLeft) 0f else currentMaxX
+            offsetY = clampedY
+            settings.putFloat("$preferenceName-x", offsetX)
+            settings.putFloat("$preferenceName-y", offsetY)
+        }
+
         Column(
             modifier = modifier
-                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
-                .pointerInput(screenSize, density, preferenceName) {
+                .offset { IntOffset(displayedOffsetX.roundToInt(), displayedOffsetY.roundToInt()) }
+                .pointerInput(preferenceName) {
                     detectDragGestures(
                         onDragStart = {
+                            offsetX = animatedOffsetX
+                            offsetY = animatedOffsetY
                             dragging = true
                             hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                         },
-                        onDragEnd = {
-                            dragging = false
-                            dockedOnLeft = offsetX < screenSize.width / 2f
-                            clampPositionToViewport()
-                            settings.putFloat("$preferenceName-x", offsetX)
-                            settings.putFloat("$preferenceName-y", offsetY)
-                        },
+                        onDragEnd = ::finishDrag,
+                        onDragCancel = ::finishDrag,
                         onDrag = { change, dragAmount ->
                             change.consume()
                             if (dragging) {
-                                offsetX += dragAmount.x
-                                offsetY += dragAmount.y
-                                clampPositionToViewport()
+                                offsetX = (offsetX + dragAmount.x).coerceIn(0f, currentMaxX)
+                                offsetY = (offsetY + dragAmount.y).coerceIn(0f, currentMaxY)
                             }
                         },
                     )

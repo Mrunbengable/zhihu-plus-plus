@@ -33,16 +33,15 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.github.zly2006.zhihu.platform.isAnswerSwipeSupported
 import com.github.zly2006.zhihu.platform.rememberSettingsStore
 import com.github.zly2006.zhihu.ui.rememberObservedSetting
 import com.github.zly2006.zhihu.ui.subscreens.DEFAULT_SHOW_CONTENT_END_MARKER
@@ -160,6 +159,14 @@ fun <T> PaginatedList(
     }
 
     val pullToRefreshHandle = LocalFeedPullToRefreshHandle.current
+    DisposableEffect(pullToRefreshHandle, listState, reverseLayout) {
+        pullToRefreshHandle?.setCanScrollBackwardProvider {
+            reverseLayout || listState.canScrollBackward
+        }
+        onDispose {
+            pullToRefreshHandle?.setCanScrollBackwardProvider(null)
+        }
+    }
 
     LazyColumn(
         state = listState,
@@ -167,13 +174,6 @@ fun <T> PaginatedList(
         contentPadding = contentPadding,
         reverseLayout = reverseLayout,
     ) {
-        if (pullToRefreshHandle != null && isAnswerSwipeSupported && !reverseLayout && items.isNotEmpty()) {
-            item(key = "paginated_list_top_refresh_card") {
-                FeedTopRefreshDragCard(
-                    modifier = Modifier.testTag("feed_top_refresh_card"),
-                )
-            }
-        }
         topContent(this)
 
         if (key != null) {

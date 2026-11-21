@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -49,6 +50,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -66,6 +68,7 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -105,6 +108,7 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -139,7 +143,6 @@ import com.github.zly2006.zhihu.ui.article.voteUpNeutralButtonColors
 import com.github.zly2006.zhihu.ui.article.voteUpNeutralContent
 import com.github.zly2006.zhihu.ui.article.voteUpNeutralContentDuo3
 import com.github.zly2006.zhihu.ui.components.ANSWER_SWITCH_SENSITIVITY_PREFERENCE_KEY
-import com.github.zly2006.zhihu.ui.components.AnswerBoundaryPreviewCard
 import com.github.zly2006.zhihu.ui.components.AnswerHorizontalOverscroll
 import com.github.zly2006.zhihu.ui.components.AnswerVerticalOverscroll
 import com.github.zly2006.zhihu.ui.components.AuthorBadge
@@ -161,6 +164,7 @@ import com.github.zly2006.zhihu.ui.components.rememberPreferCollapsedExitUntilCo
 import com.github.zly2006.zhihu.ui.subscreens.DEFAULT_PAGE_TURN_SWITCH_ANSWER
 import com.github.zly2006.zhihu.ui.subscreens.DUO3_TIQIAN_MARKDOWN_PREFERENCE_KEY
 import com.github.zly2006.zhihu.ui.subscreens.PREF_PAGE_TURN_SWITCH_ANSWER
+import com.github.zly2006.zhihu.ui.subscreens.rememberDuo3PointerInteractionEnabled
 import com.github.zly2006.zhihu.util.formatCompactCount
 import com.github.zly2006.zhihu.util.formatFullDateTime
 import com.github.zly2006.zhihu.util.parseEmphasizedHtmlTextWithTheme
@@ -227,6 +231,7 @@ fun ArticleScreen(
     val useDuo3ArticleActions by rememberObservedSetting(settings, "duo3_article_actions") {
         getBoolean("duo3_article_actions", false)
     }
+    val useDuo3PointerInteraction = rememberDuo3PointerInteractionEnabled(settings)
     val buttonSkipAnswer by rememberObservedSetting(settings, "buttonSkipAnswer") { getBoolean("buttonSkipAnswer", true) }
     val autoHideSkipAnswerButton by rememberObservedSetting(settings, "autoHideSkipAnswerButton") {
         getBoolean("autoHideSkipAnswerButton", true)
@@ -320,7 +325,7 @@ fun ArticleScreen(
             .takeIf { article.type == ArticleType.Answer && pageTurnSwitchAnswer },
     )
     RegisterAnswerSwitchTargetEffect(
-        active = article.type == ArticleType.Answer && pageTurnActive,
+        active = article.type == ArticleType.Answer && pageTurnActive && useDuo3PointerInteraction,
         onPrevious = {
             if (answerNavigationState.answerNavigator?.previousAnswer != null) {
                 answerNavigationState.navigateToPrevious()
@@ -675,69 +680,71 @@ fun ArticleScreen(
                                     .height(36.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                             ) {
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(50))
-                                        .background(
-                                            color = if (viewModel.voteUpState == VoteUpState.Neutral) {
-                                                voteUpNeutralContent().copy(alpha = 0.1f)
-                                            } else {
-                                                voteUpNeutralContent()
-                                            },
-                                        ),
-                                    horizontalArrangement = Arrangement.Start,
-                                ) {
-                                    when (viewModel.voteUpState) {
-                                        VoteUpState.Neutral -> {
-                                            Button(
-                                                onClick = { viewModel.toggleVoteUp(environment, VoteUpState.Up) },
-                                                colors = voteUpNeutralButtonColors(),
-                                                shape = RectangleShape,
-                                                contentPadding = PaddingValues(horizontal = 0.dp),
-                                            ) {
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Icon(painterResource(Res.drawable.ic_vote_up_24dp), "赞同")
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text(text = viewModel.voteUpCount.toString())
+                                CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .clip(RoundedCornerShape(50))
+                                            .background(
+                                                color = if (viewModel.voteUpState == VoteUpState.Neutral) {
+                                                    MaterialTheme.colorScheme.secondaryContainer
+                                                } else {
+                                                    voteUpNeutralContent()
+                                                },
+                                            ),
+                                        horizontalArrangement = Arrangement.Start,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        when (viewModel.voteUpState) {
+                                            VoteUpState.Neutral -> {
+                                                Button(
+                                                    onClick = { viewModel.toggleVoteUp(environment, VoteUpState.Up) },
+                                                    colors = voteUpNeutralButtonColors(),
+                                                    shape = RectangleShape,
+                                                    modifier = Modifier.fillMaxHeight(),
+                                                    contentPadding = PaddingValues(start = 10.dp, end = 6.dp),
+                                                ) {
+                                                    Icon(painterResource(Res.drawable.ic_vote_up_24dp), "赞同")
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text(text = viewModel.voteUpCount.toString())
+                                                }
+                                                Button(
+                                                    onClick = { viewModel.toggleVoteUp(environment, VoteUpState.Down) },
+                                                    colors = voteUpNeutralButtonColors(),
+                                                    shape = RectangleShape,
+                                                    modifier = Modifier.fillMaxHeight().width(40.dp),
+                                                    contentPadding = PaddingValues(start = 2.dp, end = 6.dp),
+                                                ) {
+                                                    Icon(painterResource(Res.drawable.ic_vote_down_24dp), "反对")
+                                                }
                                             }
-                                            Button(
-                                                onClick = { viewModel.toggleVoteUp(environment, VoteUpState.Down) },
-                                                colors = voteUpNeutralButtonColors(),
-                                                shape = RectangleShape,
-                                                modifier = Modifier.height(ButtonDefaults.MinHeight).width(ButtonDefaults.MinHeight),
-                                                contentPadding = PaddingValues(horizontal = 0.dp),
-                                            ) {
-                                                Icon(painterResource(Res.drawable.ic_vote_down_24dp), "反对")
-                                            }
-                                        }
 
-                                        VoteUpState.Up -> {
-                                            Button(
-                                                onClick = { viewModel.toggleVoteUp(environment, VoteUpState.Neutral) },
-                                                colors = voteUpActiveButtonColors(),
-                                                shape = RectangleShape,
-                                                contentPadding = PaddingValues(horizontal = 0.dp),
-                                            ) {
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Icon(painterResource(Res.drawable.ic_vote_up_24dp), "赞同")
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text(text = viewModel.voteUpCount.toString())
-                                                Spacer(modifier = Modifier.width(8.dp))
+                                            VoteUpState.Up -> {
+                                                Button(
+                                                    onClick = { viewModel.toggleVoteUp(environment, VoteUpState.Neutral) },
+                                                    colors = voteUpActiveButtonColors(),
+                                                    shape = RectangleShape,
+                                                    modifier = Modifier.fillMaxHeight(),
+                                                    contentPadding = PaddingValues(start = 10.dp, end = 12.dp),
+                                                ) {
+                                                    Icon(painterResource(Res.drawable.ic_vote_up_24dp), "赞同")
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text(text = viewModel.voteUpCount.toString())
+                                                }
                                             }
-                                        }
 
-                                        VoteUpState.Down -> {
-                                            Button(
-                                                onClick = { viewModel.toggleVoteUp(environment, VoteUpState.Neutral) },
-                                                colors = voteUpActiveButtonColors(),
-                                                shape = RectangleShape,
-                                                modifier = Modifier.height(ButtonDefaults.MinHeight),
-                                                contentPadding = PaddingValues(horizontal = 0.dp),
-                                            ) {
-                                                Icon(painterResource(Res.drawable.ic_vote_down_24dp), "反对")
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text("反对")
-                                                Spacer(modifier = Modifier.width(8.dp))
+                                            VoteUpState.Down -> {
+                                                Button(
+                                                    onClick = { viewModel.toggleVoteUp(environment, VoteUpState.Neutral) },
+                                                    colors = voteUpActiveButtonColors(),
+                                                    shape = RectangleShape,
+                                                    modifier = Modifier.fillMaxHeight(),
+                                                    contentPadding = PaddingValues(start = 10.dp, end = 12.dp),
+                                                ) {
+                                                    Icon(painterResource(Res.drawable.ic_vote_down_24dp), "反对")
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text("反对")
+                                                }
                                             }
                                         }
                                     }
@@ -970,12 +977,6 @@ fun ArticleScreen(
                             .padding(innerPadding)
                             .padding(top = 8.dp),
                     ) {
-                        if (usesVerticalAnswerSwitch && !(useWebView && isLegacyWebViewSupported)) {
-                            AnswerBoundaryPreviewCard(
-                                isTopCard = true,
-                                modifier = Modifier.testTag("answer_previous_preview_card"),
-                            )
-                        }
                         if (isImmersiveMode && viewModel.authorName.isNotBlank()) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1143,22 +1144,24 @@ fun ArticleScreen(
                                 Spacer(Modifier.height(12.dp))
                             }
                             val endorsements = viewModel.endorsements
-                            Column(
-                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                                horizontalAlignment = Alignment.Start,
-                            ) {
-                                if (pinAnswerDate) {
-                                    DateTexts()
-                                }
-                                ArticleVotersSocialCredit()
-                                if (endorsements.isNotEmpty()) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    FlowRow(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                                    ) {
-                                        endorsements.forEach { endorsement ->
-                                            AnswerEndorsementChip(endorsement)
+                            DisableSelection {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                    horizontalAlignment = Alignment.Start,
+                                ) {
+                                    if (pinAnswerDate) {
+                                        DateTexts()
+                                    }
+                                    ArticleVotersSocialCredit()
+                                    if (endorsements.isNotEmpty()) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                                        ) {
+                                            endorsements.forEach { endorsement ->
+                                                AnswerEndorsementChip(endorsement)
+                                            }
                                         }
                                     }
                                 }
@@ -1206,8 +1209,14 @@ fun ArticleScreen(
                                     header = {},
                                     footer = {
                                         ArticleVideoAttachmentContent(viewModel.attachment)
+                                    },
+                                )
+                                DisableSelection {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
                                         Column(
-                                            modifier = Modifier.fillMaxWidth(),
+                                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                                             horizontalAlignment = Alignment.End,
                                         ) {
                                             if (!pinAnswerDate) {
@@ -1222,20 +1231,9 @@ fun ArticleScreen(
                                             }
                                         }
                                         ContentEndMarker()
-                                        val hasBottomPreviewCard =
-                                            usesVerticalAnswerSwitch && answerNavigationState.answerNavigator?.nextAnswer != null
-                                        Spacer(modifier = Modifier.height(if (hasBottomPreviewCard) 8.dp else (16 + 36).dp))
-                                    },
-                                )
-                            }
-                        }
-                        if (usesVerticalAnswerSwitch && !(useWebView && isLegacyWebViewSupported)) {
-                            AnswerBoundaryPreviewCard(
-                                isTopCard = false,
-                                modifier = Modifier.testTag("answer_next_preview_card"),
-                            )
-                            if (answerNavigationState.answerNavigator?.nextAnswer != null) {
-                                Spacer(modifier = Modifier.height((16 + 36).dp))
+                                        Spacer(modifier = Modifier.height(if (useDuo3PointerInteraction) 76.dp else (16 + 36).dp))
+                                    }
+                                }
                             }
                         }
                     }
@@ -1282,7 +1280,8 @@ fun ArticleScreen(
                 isAtBottom = { scrollState.value >= effectiveScrollMaxValue },
                 scrollState = scrollState,
                 answerSwitchSensitivity = answerSwitchSensitivity,
-                showBackgroundPreviewCards = false,
+                enableMouseOverscroll = useDuo3PointerInteraction,
+                duo3Style = useDuo3PointerInteraction || useDuo3ArticleActions,
                 onOverscrollOffsetChange = updateReadingPlayerOverlayOffset,
             ) {
                 MainContent()
@@ -1345,7 +1344,12 @@ fun ArticleScreen(
             }
             DraggableRefreshButton(
                 modifier = Modifier.graphicsLayer { alpha = skipButtonAlpha },
-                onClick = { fabClickCount++ },
+                bottomAvoidance = readingPlayerOverlayPadding,
+                onClick = {
+                    if (showSkipButton) {
+                        fabClickCount++
+                    }
+                },
                 preferenceName = "buttonSkipAnswer",
             ) {
                 if (answerNavigationState.navigatingToNextAnswer) {
